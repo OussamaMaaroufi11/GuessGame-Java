@@ -1,3 +1,4 @@
+import java.io.IOException;
 import java.io.PrintWriter;
 import java.net.Socket;
 
@@ -38,7 +39,7 @@ public class PeerConnection {
             System.out.println("Brut   : " + cleanMessage);
             System.out.println("==========================================\n");
 
-        } catch (Exception e) {
+        } catch (IOException e) {
             System.out.println("[ERREUR] Envoi P2P : " + e.getMessage());
         }
     }

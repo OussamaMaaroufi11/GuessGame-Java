@@ -31,6 +31,10 @@ public class PlayerInfo {
     }
 
     public synchronized void setCurrentRoom(String currentRoom) {
-        this.currentRoom = currentRoom;
+        if (currentRoom == null || currentRoom.isBlank()) {
+            this.currentRoom = null;
+        } else {
+            this.currentRoom = currentRoom.trim();
+        }
     }
 }

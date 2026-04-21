@@ -116,7 +116,7 @@ public class Room {
             resetGame();
         }
 
-        if (adminName != null && adminName.equalsIgnoreCase(playerName)) {
+        if (adminName != null && adminName.equalsIgnoreCase(playerName.trim())) {
             if (players.isEmpty()) {
                 adminName = "SYSTEM";
             } else {

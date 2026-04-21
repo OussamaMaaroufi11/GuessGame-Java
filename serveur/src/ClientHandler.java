@@ -82,7 +82,7 @@ public class ClientHandler extends Thread {
             case "GET_GAME_STATUS" -> handleGetGameStatus(message);
             case "GET_ATTEMPTS_LEFT" -> handleGetAttemptsLeft(message);
             case "GET_ROOM_PLAYERS" -> handleGetRoomPlayers(message);
-            case "REPLAY_ROOM" -> handleReplayRoom(message);
+            case "NEW_GAME" -> handleNewGame(message);
             case "KICK_PLAYER" -> handleKickPlayer(message);
 
             case "PLAY_SERVER" -> handlePlayServer(message);
@@ -423,13 +423,10 @@ public class ClientHandler extends Thread {
 
         int[] feedback = computeFeedback(room.getSecretCombination(), guess);
 
-        // Le feedback est envoyé au joueur qui a proposé
         send("GG|FEEDBACK|" + feedback[0] + "|" + feedback[1]);
 
         if (feedback[1] == 4) {
             room.finishGame(who);
-
-            // La victoire doit être annoncée à tous les joueurs de la salle
             broadcastToRoom(room, "GG|WINNER|" + room.getRoomName() + "|" + who);
             return;
         }
@@ -536,7 +533,7 @@ public class ClientHandler extends Thread {
         send("GG|ROOM_PLAYERS|" + room.getRoomName() + "|" + room.getPlayersAsCsv());
     }
 
-    private void handleReplayRoom(GGMessage message) {
+    private void handleNewGame(GGMessage message) {
         if (!ensureConnected()) {
             return;
         }
@@ -559,7 +556,7 @@ public class ClientHandler extends Thread {
         }
 
         room.resetGame();
-        broadcastToRoom(room, "GG|REPLAY_READY|" + room.getRoomName() + "|" + room.getPlayersAsCsv());
+        broadcastToRoom(room, "GG|NEW_GAME|" + room.getRoomName() + "|" + room.getPlayersAsCsv());
     }
 
     private void handleKickPlayer(GGMessage message) {
@@ -586,7 +583,8 @@ public class ClientHandler extends Thread {
             return;
         }
 
-        if (room.getSecretOwner() == null || !room.getSecretOwner().equalsIgnoreCase(currentPlayer.getPlayerName())) {
+        if (room.getSecretOwner() == null
+                || !room.getSecretOwner().equalsIgnoreCase(currentPlayer.getPlayerName())) {
             sendError("ONLY_SECRET_OWNER_CAN_KICK");
             return;
         }
@@ -800,8 +798,8 @@ public class ClientHandler extends Thread {
                 System.out.println("Joueurs : " + msg.getField(1));
             } else if ("WINNER".equals(msg.getType())) {
                 System.out.println("Gagnant annoncé : " + msg.getField(1));
-            } else if ("REPLAY_READY".equals(msg.getType())) {
-                System.out.println("Salle prête pour rejouer : " + msg.getField(0));
+            } else if ("NEW_GAME".equals(msg.getType())) {
+                System.out.println("Salle prête pour une nouvelle partie : " + msg.getField(0));
                 System.out.println("Joueurs : " + msg.getField(1));
             } else {
                 System.out.println("Brut : " + message);
@@ -903,7 +901,7 @@ public class ClientHandler extends Thread {
             case "SERVER_GAME_OVER" -> System.out.println("Partie serveur perdue.");
             case "PLAYER_KICKED" -> System.out.println("Joueur expulsé : " + msg.getField(0));
             case "KICK_SUCCESS" -> System.out.println("Joueur expulsé : " + msg.getField(0));
-            case "REPLAY_READY" -> System.out.println("Salle prête pour rejouer : " + msg.getField(0));
+            case "NEW_GAME" -> System.out.println("Salle prête pour une nouvelle partie : " + msg.getField(0));
             case "ERROR" -> System.out.println("Erreur envoyée : " + msg.getField(0));
             default -> System.out.println("Brut : " + message);
         }

@@ -3,9 +3,12 @@ import java.io.Closeable;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.PrintWriter;
+import java.net.InetAddress;
+import java.net.NetworkInterface;
 import java.net.Socket;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Enumeration;
 import java.util.List;
 
 public class ClientApp {
@@ -87,7 +90,25 @@ public class ClientApp {
             runMainLoop();
 
         } catch (IOException e) {
-            System.out.println("[ERREUR] Impossible de se connecter au serveur : " + e.getMessage());
+            String msg = e.getMessage();
+
+            if (msg != null && (
+                    msg.contains("Connection reset")
+                            || msg.contains("Broken pipe")
+                            || msg.contains("Connection aborted")
+                            || msg.contains("forcibly closed")
+            )) {
+                System.out.println("[ERREUR] Connexion au serveur perdue.");
+            } else if (msg != null && (
+                    msg.contains("Connection refused")
+                            || msg.contains("connect timed out")
+                            || msg.contains("No route to host")
+                            || msg.contains("Network is unreachable")
+            )) {
+                System.out.println("[ERREUR] Impossible de joindre le serveur.");
+            } else {
+                System.out.println("[ERREUR] Problème réseau : " + msg);
+            }
         } finally {
             closeConnection();
         }
@@ -145,6 +166,10 @@ public class ClientApp {
     private boolean handleRoomAndPreparationFlow() throws IOException {
         refreshCurrentPlayers();
 
+        if (currentRoom == null) {
+            return true;
+        }
+
         int roomChoice = ui.showRoomMenu(currentRoom, currentPlayers);
 
         switch (roomChoice) {
@@ -152,12 +177,39 @@ public class ClientApp {
                 sendMessage("GG|START_GAME|" + currentRoom);
                 GGMessage response = readParsedResponse();
 
-                if (response != null && "GAME_STARTED".equals(response.getType())) {
-                    updatePlayersFromCsv(response.getField(1));
-                    roomGameStarted = true;
-                    return handlePreparationMode();
+                if (response == null) {
+                    return true;
+                }
 
-                } else if (response != null && "ERROR".equals(response.getType())) {
+                if ("PLAYER_KICKED".equals(response.getType())) {
+                    return true;
+                }
+
+                if ("GAME_STARTED".equals(response.getType())) {
+                    if (response.getFieldCount() > 1) {
+                        updatePlayersFromCsv(response.getField(1));
+                    }
+
+                    roomGameStarted = true;
+                    refreshRoomState();
+
+                    if (currentRoom == null) {
+                        return true;
+                    }
+
+                    if (roomGameFinished) {
+                        return handleEndGameMenu();
+                    }
+
+                    if (secretDefined) {
+                        System.out.println("Le secret a déjà été défini par : " + secretOwner);
+                        return true;
+                    }
+
+                    return handlePreparationMode();
+                }
+
+                if ("ERROR".equals(response.getType())) {
                     String error = response.getField(0);
 
                     if ("NOT_ENOUGH_PLAYERS".equals(error)) {
@@ -168,6 +220,10 @@ public class ClientApp {
                     if ("GAME_ALREADY_STARTED".equals(error)) {
                         refreshRoomState();
                         refreshCurrentPlayers();
+
+                        if (currentRoom == null) {
+                            return true;
+                        }
 
                         if (roomGameFinished) {
                             return handleEndGameMenu();
@@ -191,7 +247,9 @@ public class ClientApp {
 
             case 2 -> {
                 leaveCurrentRoom();
-                handleListRooms();
+                if (currentRoom == null) {
+                    handleListRooms();
+                }
                 return true;
             }
 
@@ -219,9 +277,28 @@ public class ClientApp {
 
     private boolean handlePreparationMode() throws IOException {
         while (currentRoom != null && roomGameStarted && !secretDefined) {
+            refreshRoomState();
+
+            if (currentRoom == null) {
+                return true;
+            }
+
+            if (roomGameFinished) {
+                return handleEndGameMenu();
+            }
+
+            if (!roomGameStarted) {
+                return true;
+            }
+
+            if (secretDefined) {
+                System.out.println("Le secret a déjà été défini par : " + secretOwner);
+                return true;
+            }
+
             GGMessage immediate = tryReadImmediateMessage();
             if (handleRoomTerminalMessage(immediate)) {
-                return handleEndGameMenu();
+                return currentRoom == null ? true : handleEndGameMenu();
             }
 
             if (currentRoom == null) {
@@ -237,6 +314,7 @@ public class ClientApp {
             }
 
             if (secretDefined) {
+                System.out.println("Le secret a déjà été défini par : " + secretOwner);
                 return true;
             }
 
@@ -245,6 +323,29 @@ public class ClientApp {
             switch (choice) {
                 case 1 -> {
                     refreshCurrentPlayers();
+
+                    if (currentRoom == null) {
+                        return true;
+                    }
+
+                    if (roomGameFinished) {
+                        return handleEndGameMenu();
+                    }
+
+                    refreshRoomState();
+
+                    if (currentRoom == null) {
+                        return true;
+                    }
+
+                    if (roomGameFinished) {
+                        return handleEndGameMenu();
+                    }
+
+                    if (secretDefined) {
+                        System.out.println("Le secret a déjà été défini par : " + secretOwner);
+                        return true;
+                    }
 
                     if (currentPlayers.size() <= 1) {
                         System.out.println("Tu es maintenant seul dans la salle.");
@@ -255,15 +356,7 @@ public class ClientApp {
                         return true;
                     }
 
-                    if (roomGameFinished) {
-                        return handleEndGameMenu();
-                    }
-
                     if (!roomGameStarted) {
-                        return true;
-                    }
-
-                    if (secretDefined) {
                         return true;
                     }
 
@@ -276,7 +369,14 @@ public class ClientApp {
 
                     if (response == null) {
                         System.out.println("Aucune réponse du serveur.");
-                    } else if ("SECRET_ACCEPTED".equals(response.getType())) {
+                        return true;
+                    }
+
+                    if ("PLAYER_KICKED".equals(response.getType())) {
+                        return true;
+                    }
+
+                    if ("SECRET_ACCEPTED".equals(response.getType())) {
                         secretOwner = playerName;
                         secretDefined = true;
                         System.out.println("Secret enregistré avec succès : " + Arrays.toString(secret));
@@ -284,6 +384,7 @@ public class ClientApp {
                     } else if ("SECRET_ALREADY_SET".equals(response.getType())) {
                         secretOwner = response.getField(1);
                         secretDefined = true;
+                        System.out.println("Le secret a déjà été défini par : " + secretOwner);
                         return true;
                     } else if ("ERROR".equals(response.getType())) {
                         System.out.println("Erreur : " + response.getField(0));
@@ -293,9 +394,24 @@ public class ClientApp {
                 case 2 -> {
                     System.out.println("En attente qu'un joueur définisse le secret...");
 
+                    refreshRoomState();
+
+                    if (currentRoom == null) {
+                        return true;
+                    }
+
+                    if (roomGameFinished) {
+                        return handleEndGameMenu();
+                    }
+
+                    if (secretDefined) {
+                        System.out.println("Le secret a déjà été défini par : " + secretOwner);
+                        return true;
+                    }
+
                     GGMessage waitImmediate = tryReadImmediateMessage();
                     if (handleRoomTerminalMessage(waitImmediate)) {
-                        return handleEndGameMenu();
+                        return currentRoom == null ? true : handleEndGameMenu();
                     }
 
                     if (currentRoom == null) {
@@ -304,6 +420,14 @@ public class ClientApp {
 
                     refreshCurrentPlayers();
 
+                    if (currentRoom == null) {
+                        return true;
+                    }
+
+                    if (roomGameFinished) {
+                        return handleEndGameMenu();
+                    }
+
                     if (currentPlayers.size() <= 1) {
                         System.out.println("Tu es maintenant seul dans la salle.");
                         System.out.println("La partie a été arrêtée.");
@@ -311,10 +435,6 @@ public class ClientApp {
                         secretDefined = false;
                         secretOwner = null;
                         return true;
-                    }
-
-                    if (roomGameFinished) {
-                        return handleEndGameMenu();
                     }
 
                     if (!roomGameStarted) {
@@ -328,7 +448,9 @@ public class ClientApp {
 
                 case 3 -> {
                     leaveCurrentRoom();
-                    handleListRooms();
+                    if (currentRoom == null) {
+                        handleListRooms();
+                    }
                     return true;
                 }
 
@@ -350,7 +472,7 @@ public class ClientApp {
         while (currentRoom != null && secretDefined && playerName.equals(secretOwner)) {
             GGMessage immediate = tryReadImmediateMessage();
             if (handleRoomTerminalMessage(immediate)) {
-                return handleEndGameMenu();
+                return currentRoom == null ? true : handleEndGameMenu();
             }
 
             if (currentRoom == null) {
@@ -369,16 +491,22 @@ public class ClientApp {
 
             switch (choice) {
                 case 1 -> {
-                    showRoomGuessHistory();
-
-                    GGMessage afterHistory = tryReadImmediateMessage();
-                    if (handleRoomTerminalMessage(afterHistory)) {
-                        return handleEndGameMenu();
+                    boolean terminal = showRoomGuessHistory();
+                    if (terminal) {
+                        return currentRoom == null ? true : handleEndGameMenu();
                     }
                 }
 
                 case 2 -> {
                     refreshCurrentPlayers();
+
+                    if (currentRoom == null) {
+                        return true;
+                    }
+
+                    if (roomGameFinished) {
+                        return handleEndGameMenu();
+                    }
 
                     if (currentPlayers.size() <= 1) {
                         System.out.println("Tu es maintenant seul dans la salle.");
@@ -388,15 +516,21 @@ public class ClientApp {
 
                     handleKickPlayer();
 
+                    if (currentRoom == null) {
+                        return true;
+                    }
+
                     GGMessage afterKick = tryReadImmediateMessage();
                     if (handleRoomTerminalMessage(afterKick)) {
-                        return handleEndGameMenu();
+                        return currentRoom == null ? true : handleEndGameMenu();
                     }
                 }
 
                 case 3 -> {
                     leaveCurrentRoom();
-                    handleListRooms();
+                    if (currentRoom == null) {
+                        handleListRooms();
+                    }
                     return true;
                 }
 
@@ -416,6 +550,16 @@ public class ClientApp {
 
     private boolean handleGuessMode() throws IOException {
         while (currentRoom != null && secretDefined && !playerName.equals(secretOwner)) {
+
+            GGMessage immediate = tryReadImmediateMessage();
+            if (handleRoomTerminalMessage(immediate)) {
+                return currentRoom == null ? true : handleEndGameMenu();
+            }
+
+            if (currentRoom == null) {
+                return true;
+            }
+
             if (!roomGameStarted || !secretDefined) {
                 return true;
             }
@@ -429,6 +573,14 @@ public class ClientApp {
             switch (choice) {
                 case 1 -> {
                     refreshCurrentPlayers();
+
+                    if (currentRoom == null) {
+                        return true;
+                    }
+
+                    if (roomGameFinished) {
+                        return handleEndGameMenu();
+                    }
 
                     if (currentPlayers.size() <= 1) {
                         System.out.println("Tu es maintenant seul dans la salle.");
@@ -444,6 +596,15 @@ public class ClientApp {
                     }
 
                     int[] attemptsInfo = getAttemptsInfoForCurrentPlayer();
+
+                    if (currentRoom == null) {
+                        return true;
+                    }
+
+                    if (roomGameFinished) {
+                        return handleEndGameMenu();
+                    }
+
                     int attemptsLeft = attemptsInfo[0];
                     int maxAttempts = attemptsInfo[1];
 
@@ -470,23 +631,61 @@ public class ClientApp {
                         break;
                     }
 
+                    if ("PLAYER_KICKED".equals(response.getType())) {
+                        return true;
+                    }
+
                     if ("FEEDBACK".equals(response.getType())) {
                         displayFeedback(response);
 
+                        if ("4".equals(response.getField(1))) {
+                            roomGameStarted = true;
+                            roomGameFinished = true;
+                            roomWinnerName = playerName;
+                            System.out.println("Le gagnant est : " + roomWinnerName);
+                            return handleEndGameMenu();
+                        }
+
                         GGMessage followUp = tryReadImmediateMessage();
                         if (handleRoomTerminalMessage(followUp)) {
+                            return currentRoom == null ? true : handleEndGameMenu();
+                        }
+
+                        if (currentRoom == null) {
+                            return true;
+                        }
+
+                        if (roomGameFinished) {
                             return handleEndGameMenu();
                         }
 
                     } else if (handleRoomTerminalMessage(response)) {
-                        return handleEndGameMenu();
+                        return currentRoom == null ? true : handleEndGameMenu();
 
                     } else if ("ERROR".equals(response.getType())) {
                         String error = response.getField(0);
 
                         if ("GAME_NOT_STARTED".equals(error) || "NO_SECRET_DEFINED".equals(error)) {
                             refreshRoomState();
+
+                            if (currentRoom == null) {
+                                return true;
+                            }
+
+                            if (roomGameFinished) {
+                                return handleEndGameMenu();
+                            }
+
                             refreshCurrentPlayers();
+
+                            if (currentRoom == null) {
+                                return true;
+                            }
+
+                            if (roomGameFinished) {
+                                return handleEndGameMenu();
+                            }
+
                             return true;
                         }
 
@@ -495,17 +694,17 @@ public class ClientApp {
                 }
 
                 case 2 -> {
-                    showRoomGuessHistory();
-
-                    GGMessage afterHistory = tryReadImmediateMessage();
-                    if (handleRoomTerminalMessage(afterHistory)) {
-                        return handleEndGameMenu();
+                    boolean terminal = showRoomGuessHistory();
+                    if (terminal) {
+                        return currentRoom == null ? true : handleEndGameMenu();
                     }
                 }
 
                 case 3 -> {
                     leaveCurrentRoom();
-                    handleListRooms();
+                    if (currentRoom == null) {
+                        handleListRooms();
+                    }
                     return true;
                 }
 
@@ -532,28 +731,41 @@ public class ClientApp {
                 return true;
             }
 
-            refreshCurrentPlayers();
-
             int choice = ui.showEndGameMenu(roomWinnerName == null ? "Inconnu" : roomWinnerName);
 
             switch (choice) {
                 case 1 -> {
-                    sendMessage("GG|REPLAY_ROOM|" + currentRoom);
+                    sendMessage("GG|NEW_GAME|" + currentRoom);
                     GGMessage response = readParsedResponse();
 
-                    if (response != null && "REPLAY_READY".equals(response.getType())) {
-                        updatePlayersFromCsv(response.getField(1));
+                    if (response == null) {
+                        return true;
+                    }
+
+                    if ("PLAYER_KICKED".equals(response.getType())) {
+                        return true;
+                    }
+
+                    if ("NEW_GAME".equals(response.getType())) {
+                        if (response.getFieldCount() > 1) {
+                            updatePlayersFromCsv(response.getField(1));
+                        }
                         roomGameStarted = false;
                         resetRoomGameStateOnly();
+                        System.out.println("Nouvelle partie prête.");
                         return true;
-                    } else if (response != null && "ERROR".equals(response.getType())) {
+                    } else if ("ERROR".equals(response.getType())) {
                         System.out.println("Erreur : " + response.getField(0));
+                    } else {
+                        System.out.println("Réponse inattendue du serveur : " + response.getType());
                     }
                 }
 
                 case 2 -> {
                     leaveCurrentRoom();
-                    handleListRooms();
+                    if (currentRoom == null) {
+                        handleListRooms();
+                    }
                     return true;
                 }
 
@@ -673,9 +885,15 @@ public class ClientApp {
             return;
         }
 
+        if ("PLAYER_KICKED".equals(response.getType())) {
+            return;
+        }
+
         if ("JOINED_ROOM".equals(response.getType())) {
             currentRoom = response.getField(0);
-            updatePlayersFromCsv(response.getField(1));
+            if (response.getFieldCount() > 1) {
+                updatePlayersFromCsv(response.getField(1));
+            }
             resetRoomGameStateOnly();
             roomGameStarted = false;
 
@@ -697,13 +915,30 @@ public class ClientApp {
 
         String roomToLeave = currentRoom;
         sendMessage("GG|LEAVE_ROOM|" + roomToLeave);
-        GGMessage response = readParsedResponse();
 
-        if (response != null && "LEFT_ROOM".equals(response.getType())) {
-            System.out.println("Vous avez quitté la salle : " + roomToLeave);
-            resetRoomStateCompletely();
-        } else if (response != null && "ERROR".equals(response.getType())) {
-            System.out.println("Erreur : " + response.getField(0));
+        while (true) {
+            GGMessage response = readParsedResponse();
+
+            if (response == null) {
+                return;
+            }
+
+            if ("PLAYER_KICKED".equals(response.getType())) {
+                return;
+            }
+
+            if ("LEFT_ROOM".equals(response.getType())) {
+                System.out.println("Vous avez quitté la salle : " + roomToLeave);
+                resetRoomStateCompletely();
+                return;
+            }
+
+            if ("ERROR".equals(response.getType())) {
+                System.out.println("Erreur : " + response.getField(0));
+                return;
+            }
+
+            handleRoomTerminalMessage(response);
         }
     }
 
@@ -713,6 +948,10 @@ public class ClientApp {
         GGMessage response = readParsedResponse();
 
         if (response == null) {
+            return;
+        }
+
+        if ("PLAYER_KICKED".equals(response.getType())) {
             return;
         }
 
@@ -838,6 +1077,20 @@ public class ClientApp {
         }
     }
 
+    private void drainPendingRoomMessages() {
+        try {
+            while (in != null && in.ready()) {
+                String raw = in.readLine();
+                if (raw == null) {
+                    break;
+                }
+                displayReceivedMessage(raw);
+            }
+        } catch (IOException e) {
+            System.out.println("Erreur vidage messages après expulsion : " + e.getMessage());
+        }
+    }
+
     private void handleServerEndGameMenu() throws IOException {
         drainImmediateMessages();
 
@@ -885,6 +1138,10 @@ public class ClientApp {
 
         if (response == null) {
             System.out.println("Aucune réponse du serveur.");
+            return;
+        }
+
+        if ("PLAYER_KICKED".equals(response.getType())) {
             return;
         }
 
@@ -952,13 +1209,61 @@ public class ClientApp {
                     continue;
                 }
 
-                PeerConnection.send(peerHost, peerTargetPort, message);
+                String cleanHost = peerHost.trim();
+
+                if (isSelfHost(cleanHost) && peerTargetPort == peerPort) {
+                    System.out.println("Tu ne peux pas envoyer un message P2P à toi-même.");
+                    return;
+                }
+
+                PeerConnection.send(cleanHost, peerTargetPort, message);
                 return;
             }
 
         } catch (Exception e) {
             System.out.println("Erreur P2P : " + e.getMessage());
         }
+    }
+
+    private boolean isSelfHost(String host) {
+        if (host == null || host.isBlank()) {
+            return false;
+        }
+
+        String cleanHost = host.trim();
+
+        if (cleanHost.equalsIgnoreCase("127.0.0.1") || cleanHost.equalsIgnoreCase("localhost")) {
+            return true;
+        }
+
+        try {
+            InetAddress target = InetAddress.getByName(cleanHost);
+
+            if (target.isLoopbackAddress()) {
+                return true;
+            }
+
+            Enumeration<NetworkInterface> interfaces = NetworkInterface.getNetworkInterfaces();
+            while (interfaces.hasMoreElements()) {
+                NetworkInterface ni = interfaces.nextElement();
+
+                if (!ni.isUp()) {
+                    continue;
+                }
+
+                Enumeration<InetAddress> addresses = ni.getInetAddresses();
+                while (addresses.hasMoreElements()) {
+                    InetAddress addr = addresses.nextElement();
+                    if (addr.equals(target)) {
+                        return true;
+                    }
+                }
+            }
+        } catch (Exception e) {
+            return false;
+        }
+
+        return false;
     }
 
     private GGMessage readParsedResponse() throws IOException {
@@ -968,7 +1273,6 @@ public class ClientApp {
             System.out.println("Connexion au serveur perdue.");
             serverGameActive = false;
             resetRoomStateCompletely();
-            closeConnection();
             return null;
         }
 
@@ -981,7 +1285,8 @@ public class ClientApp {
             if (kickedPlayer == null || kickedPlayer.isBlank() || kickedPlayer.equalsIgnoreCase(playerName)) {
                 System.out.println("Vous avez été expulsé de la salle.");
                 resetRoomStateCompletely();
-                return null;
+                drainPendingRoomMessages();
+                return msg;
             }
         }
 
@@ -1005,7 +1310,8 @@ public class ClientApp {
                     if (kickedPlayer == null || kickedPlayer.isBlank() || kickedPlayer.equalsIgnoreCase(playerName)) {
                         System.out.println("Vous avez été expulsé de la salle.");
                         resetRoomStateCompletely();
-                        return null;
+                        drainPendingRoomMessages();
+                        return msg;
                     }
                 }
 
@@ -1018,53 +1324,84 @@ public class ClientApp {
         return null;
     }
 
+    private GGMessage waitForExpectedTypes(String... expectedTypes) throws IOException {
+        while (true) {
+            GGMessage msg = readParsedResponse();
+            if (msg == null) {
+                return null;
+            }
+
+            if ("PLAYER_KICKED".equals(msg.getType())) {
+                return msg;
+            }
+
+            String type = msg.getType();
+
+            for (String expected : expectedTypes) {
+                if (expected.equals(type)) {
+                    return msg;
+                }
+            }
+
+            handleRoomTerminalMessage(msg);
+        }
+    }
+
     private void refreshRoomState() throws IOException {
         if (currentRoom == null) {
             return;
         }
 
-        refreshGameStatus();
-
-        sendMessage("GG|GET_SECRET_OWNER|" + currentRoom);
-        GGMessage response = readParsedResponse();
-
-        if (response != null && "SECRET_OWNER".equals(response.getType())) {
-            String owner = response.getField(1);
-            secretOwner = (owner == null || owner.isBlank()) ? null : owner;
-            secretDefined = secretOwner != null;
-        } else {
-            secretOwner = null;
-            secretDefined = false;
-        }
-    }
-
-    private void refreshGameStatus() throws IOException {
-        if (currentRoom == null) {
-            return;
-        }
-
         sendMessage("GG|GET_GAME_STATUS|" + currentRoom);
-        GGMessage response = readParsedResponse();
+        GGMessage statusResponse = waitForExpectedTypes("GAME_STATUS", "WINNER", "GAME_FINISHED", "ERROR", "PLAYER_KICKED");
 
-        if (response == null) {
+        if (statusResponse == null) {
             return;
         }
 
-        if ("GAME_STATUS".equals(response.getType())) {
-            String started = response.getField(1);
-            String finished = response.getField(2);
-            String winner = response.getField(3);
+        if ("PLAYER_KICKED".equals(statusResponse.getType())) {
+            return;
+        }
+
+        if ("GAME_STATUS".equals(statusResponse.getType())) {
+            String started = statusResponse.getField(1);
+            String finished = statusResponse.getField(2);
+            String winner = statusResponse.getField(3);
 
             roomGameStarted = "true".equalsIgnoreCase(started);
             roomGameFinished = "true".equalsIgnoreCase(finished);
             roomWinnerName = (winner == null || winner.isBlank()) ? null : winner;
+
+        } else if ("WINNER".equals(statusResponse.getType()) || "GAME_FINISHED".equals(statusResponse.getType())) {
+            roomGameStarted = true;
+            roomGameFinished = true;
+            roomWinnerName = statusResponse.getField(1);
+        }
+
+        if (currentRoom == null) {
             return;
         }
 
-        if ("WINNER".equals(response.getType()) || "GAME_FINISHED".equals(response.getType())) {
+        sendMessage("GG|GET_SECRET_OWNER|" + currentRoom);
+        GGMessage ownerResponse = waitForExpectedTypes("SECRET_OWNER", "WINNER", "GAME_FINISHED", "ERROR", "PLAYER_KICKED");
+
+        if (ownerResponse == null) {
+            return;
+        }
+
+        if ("PLAYER_KICKED".equals(ownerResponse.getType())) {
+            return;
+        }
+
+        if ("SECRET_OWNER".equals(ownerResponse.getType())) {
+            String owner = ownerResponse.getField(1);
+            secretOwner = (owner == null || owner.isBlank()) ? null : owner;
+            secretDefined = secretOwner != null;
+
+        } else if ("WINNER".equals(ownerResponse.getType()) || "GAME_FINISHED".equals(ownerResponse.getType())) {
             roomGameStarted = true;
             roomGameFinished = true;
-            roomWinnerName = response.getField(1);
+            roomWinnerName = ownerResponse.getField(1);
         }
     }
 
@@ -1076,19 +1413,50 @@ public class ClientApp {
         sendMessage("GG|GET_ROOM_PLAYERS|" + currentRoom);
         GGMessage response = readParsedResponse();
 
-        if (response != null && "ROOM_PLAYERS".equals(response.getType())) {
-            updatePlayersFromCsv(response.getField(1));
+        if (response == null) {
+            return;
+        }
+
+        if ("PLAYER_KICKED".equals(response.getType())) {
+            return;
+        }
+
+        if ("ROOM_PLAYERS".equals(response.getType())) {
+            if (response.getFieldCount() > 1) {
+                updatePlayersFromCsv(response.getField(1));
+            } else {
+                currentPlayers.clear();
+            }
         }
     }
 
-    private void showRoomGuessHistory() throws IOException {
+    private boolean showRoomGuessHistory() throws IOException {
         sendMessage("GG|GET_GUESSES|" + currentRoom);
-        GGMessage response = readParsedResponse();
 
-        if (response != null && "GUESSES".equals(response.getType())) {
-            ui.showGuessesHistory(response.getField(1));
-        } else if (response != null && "ERROR".equals(response.getType())) {
-            System.out.println("Erreur : " + response.getField(0));
+        while (true) {
+            GGMessage response = readParsedResponse();
+
+            if (response == null) {
+                return true;
+            }
+
+            if ("PLAYER_KICKED".equals(response.getType())) {
+                return true;
+            }
+
+            if (handleRoomTerminalMessage(response)) {
+                return true;
+            }
+
+            if ("GUESSES".equals(response.getType())) {
+                ui.showGuessesHistory(response.getField(1));
+                return false;
+            }
+
+            if ("ERROR".equals(response.getType())) {
+                System.out.println("Erreur : " + response.getField(0));
+                return false;
+            }
         }
     }
 
@@ -1102,17 +1470,31 @@ public class ClientApp {
             return false;
         }
 
+        if ("PLAYER_KICKED".equals(message.getType())) {
+            return true;
+        }
+
         if ("WINNER".equals(message.getType()) || "GAME_FINISHED".equals(message.getType())) {
             roomGameStarted = true;
             roomGameFinished = true;
             roomWinnerName = message.getField(1);
+
+            if (roomWinnerName != null && !roomWinnerName.isBlank()) {
+                System.out.println("Le gagnant est : " + roomWinnerName);
+            } else {
+                System.out.println("La partie est terminée.");
+            }
+
             return true;
         }
 
-        if ("REPLAY_READY".equals(message.getType())) {
-            updatePlayersFromCsv(message.getField(1));
+        if ("NEW_GAME".equals(message.getType())) {
+            if (message.getFieldCount() > 1) {
+                updatePlayersFromCsv(message.getField(1));
+            }
             roomGameStarted = false;
             resetRoomGameStateOnly();
+            System.out.println("Nouvelle partie prête.");
             return true;
         }
 
@@ -1263,7 +1645,9 @@ public class ClientApp {
 
             case "JOINED_ROOM" -> {
                 System.out.println("Salle rejointe : " + msg.getField(0));
-                List<String> players = parseCsvToList(msg.getField(1));
+                List<String> players = msg.getFieldCount() > 1
+                        ? parseCsvToList(msg.getField(1))
+                        : new ArrayList<>();
                 System.out.println("Joueurs présents :");
                 if (players.isEmpty()) {
                     System.out.println("- Aucun");
@@ -1277,7 +1661,9 @@ public class ClientApp {
             case "LEFT_ROOM" -> System.out.println("Confirmation de sortie de salle.");
 
             case "ROOM_PLAYERS" -> {
-                List<String> players = parseCsvToList(msg.getField(1));
+                List<String> players = msg.getFieldCount() > 1
+                        ? parseCsvToList(msg.getField(1))
+                        : new ArrayList<>();
                 System.out.println("Liste actuelle des joueurs :");
                 if (players.isEmpty()) {
                     System.out.println("- Aucun");
@@ -1290,7 +1676,9 @@ public class ClientApp {
 
             case "GAME_STARTED" -> {
                 System.out.println("La partie a commencé dans la salle : " + msg.getField(0));
-                List<String> players = parseCsvToList(msg.getField(1));
+                List<String> players = msg.getFieldCount() > 1
+                        ? parseCsvToList(msg.getField(1))
+                        : new ArrayList<>();
                 System.out.println("Joueurs de la partie :");
                 if (players.isEmpty()) {
                     System.out.println("- Aucun");
@@ -1356,7 +1744,7 @@ public class ClientApp {
 
             case "PLAYER_KICKED" -> System.out.println("Joueur expulsé : " + msg.getField(0));
             case "KICK_SUCCESS" -> System.out.println("Joueur expulsé : " + msg.getField(0));
-            case "REPLAY_READY" -> System.out.println("Salle prête pour une nouvelle partie.");
+            case "NEW_GAME" -> System.out.println("Salle prête pour une nouvelle partie.");
             case "ERROR" -> System.out.println("Erreur : " + msg.getField(0));
 
             default -> {
@@ -1376,7 +1764,7 @@ public class ClientApp {
                 || ("JOINED_ROOM".equals(type) && fieldIndex == 1)
                 || ("GAME_STARTED".equals(type) && fieldIndex == 1)
                 || ("ROOM_PLAYERS".equals(type) && fieldIndex == 1)
-                || ("REPLAY_READY".equals(type) && fieldIndex == 1);
+                || ("NEW_GAME".equals(type) && fieldIndex == 1);
     }
 
     private int[] getAttemptsInfoForCurrentPlayer() throws IOException {
@@ -1387,7 +1775,15 @@ public class ClientApp {
         sendMessage("GG|GET_ATTEMPTS_LEFT|" + currentRoom);
         GGMessage response = readParsedResponse();
 
-        if (response != null && "ATTEMPTS_LEFT".equals(response.getType())) {
+        if (response == null) {
+            return new int[]{-1, -1};
+        }
+
+        if ("PLAYER_KICKED".equals(response.getType())) {
+            return new int[]{-1, -1};
+        }
+
+        if ("ATTEMPTS_LEFT".equals(response.getType())) {
             try {
                 int left = Integer.parseInt(response.getField(2));
                 int max = Integer.parseInt(response.getField(3));
@@ -1415,6 +1811,17 @@ public class ClientApp {
     }
 
     private void closeConnection() {
+        if (peerServer != null) {
+            peerServer.requestStop();
+
+            try {
+                peerServer.join(1000);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                System.out.println("[ERREUR] Attente de fermeture du PeerServer interrompue.");
+            }
+        }
+
         safeClose(in);
         safeClose(socket);
 

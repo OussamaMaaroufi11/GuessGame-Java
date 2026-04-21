@@ -6,6 +6,8 @@ import java.net.Socket;
 
 public class PeerServer extends Thread {
     private final int port;
+    private volatile boolean running = true;
+    private ServerSocket serverSocket;
 
     public PeerServer(int port) {
         this.port = port;
@@ -20,12 +22,13 @@ public class PeerServer extends Thread {
             return;
         }
 
-        try (ServerSocket serverSocket = new ServerSocket(port)) {
+        try (ServerSocket ss = new ServerSocket(port)) {
+            this.serverSocket = ss;
             System.out.println("[P2P] PeerServer actif sur le port " + port);
 
-            while (!isInterrupted()) {
+            while (running && !isInterrupted()) {
                 try (
-                        Socket peerSocket = serverSocket.accept();
+                        Socket peerSocket = ss.accept();
                         BufferedReader in = new BufferedReader(
                                 new InputStreamReader(peerSocket.getInputStream()))
                 ) {
@@ -36,14 +39,29 @@ public class PeerServer extends Thread {
                     displayPeerMessage(remoteHost, remotePort, raw);
 
                 } catch (IOException e) {
-                    if (!isInterrupted()) {
+                    if (running && !isInterrupted()) {
                         System.out.println("[ERREUR] Connexion peer : " + e.getMessage());
                     }
                 }
             }
 
         } catch (IOException e) {
-            System.out.println("[ERREUR] PeerServer : " + e.getMessage());
+            if (running) {
+                System.out.println("[ERREUR] PeerServer : " + e.getMessage());
+            }
+        }
+    }
+
+    public void requestStop() {
+        running = false;
+        interrupt();
+
+        try {
+            if (serverSocket != null && !serverSocket.isClosed()) {
+                serverSocket.close();
+            }
+        } catch (IOException e) {
+            System.out.println("[ERREUR] Fermeture PeerServer : " + e.getMessage());
         }
     }
 
@@ -105,7 +123,8 @@ public class PeerServer extends Thread {
 
         System.out.println("Type   : MESSAGE_GG_REÇU");
         System.out.println("Commande détectée : " + message.getType());
-        System.out.println("Info   : les commandes GG|... sont réservées au serveur TCP.");
+        System.out.println("Info   : message GG reçu via le canal P2P.");
+        System.out.println("Note   : dans cette version, le PeerServer affiche le message mais ne pilote pas la logique du jeu.");
 
         if (message.getFieldCount() == 0) {
             System.out.println("Champs : aucun");

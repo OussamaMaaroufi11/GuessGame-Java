@@ -151,7 +151,7 @@ public class ConsoleUI {
         if (secretOwner == null || secretOwner.isBlank()) {
             System.out.println("Aucun secret n'a encore été défini.");
         } else {
-            System.out.println("Le joueur " + secretOwner + " a défini la combinaison secrète.");
+            System.out.println("Information : secret associé au joueur " + secretOwner + ".");
         }
 
         System.out.println("================================");

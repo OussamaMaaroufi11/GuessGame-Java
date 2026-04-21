@@ -89,7 +89,6 @@ public class ServerMain {
 
                 String name = ni.getDisplayName().toLowerCase();
 
-                // On ignore explicitement les interfaces virtuelles / locales inutiles
                 if (name.contains("vmware")
                         || name.contains("virtualbox")
                         || name.contains("hyper-v")
@@ -117,17 +116,14 @@ public class ServerMain {
                     if (addr instanceof Inet4Address && !addr.isLoopbackAddress()) {
                         String ip = addr.getHostAddress();
 
-                        // On ignore les adresses auto-attribuées Windows
                         if (ip.startsWith("169.254.")) {
                             continue;
                         }
 
-                        // On garde une IP de secours
                         if (fallbackIp == null) {
                             fallbackIp = ip;
                         }
 
-                        // Si l'interface ressemble à une vraie carte réseau, on la prend
                         if (preferred) {
                             return ip;
                         }

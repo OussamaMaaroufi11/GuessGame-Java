@@ -3,6 +3,8 @@ import java.util.List;
 
 public class MessageParser {
 
+    private static final String EXPECTED_PREFIX = "GG";
+
     private MessageParser() {
         // classe utilitaire
     }
@@ -25,7 +27,7 @@ public class MessageParser {
         String prefix = parts[0] == null ? "" : parts[0].trim();
         String type = parts[1] == null ? "" : parts[1].trim();
 
-        if (prefix.isEmpty() || type.isEmpty()) {
+        if (!EXPECTED_PREFIX.equalsIgnoreCase(prefix) || type.isEmpty()) {
             return null;
         }
 
