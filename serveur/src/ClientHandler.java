@@ -194,6 +194,11 @@ public class ClientHandler extends Thread {
             return;
         }
 
+        if (room.isGameStarted()) {
+            sendError("GAME_ALREADY_STARTED");
+            return;
+        }
+
         if (room.isFull()) {
             sendError("ROOM_FULL");
             return;
@@ -263,6 +268,11 @@ public class ClientHandler extends Thread {
 
         if (room.getPlayerCount() < 2) {
             sendError("NOT_ENOUGH_PLAYERS");
+            return;
+        }
+
+        if (room.isGameFinished()) {
+            sendError("GAME_FINISHED_NEEDS_RESET");
             return;
         }
 
@@ -555,8 +565,19 @@ public class ClientHandler extends Thread {
             return;
         }
 
-        room.resetGame();
-        broadcastToRoom(room, "GG|NEW_GAME|" + room.getRoomName() + "|" + room.getPlayersAsCsv());
+
+        if (room.isGameFinished() || room.hasSecret() || room.getWinnerName() != null) {
+            room.resetGame();
+            broadcastToRoom(room, "GG|NEW_GAME|" + room.getRoomName() + "|" + room.getPlayersAsCsv());
+            return;
+        }
+
+        if (room.isGameStarted()) {
+            send("GG|GAME_STARTED|" + room.getRoomName() + "|" + room.getPlayersAsCsv());
+            return;
+        }
+
+        send("GG|NEW_GAME|" + room.getRoomName() + "|" + room.getPlayersAsCsv());
     }
 
     private void handleKickPlayer(GGMessage message) {
